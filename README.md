@@ -12,7 +12,7 @@
 
 ### data file content is a pandas dataframe, indexed by a DateTimeIndex type:
 ### columns: symbols or any other fields you want .
-### index: dates/datetime for min1 data
+### index: dates for daily data/datetime for min1 data
 
 #### we can update basedata file every week/day after trading.
 
