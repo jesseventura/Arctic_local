@@ -7,6 +7,62 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 import time
 # import feather
+from progressbar import ProgressBar
+
+def read_csv_sfp(fp):
+    df = pd.DataFrame()
+    try:
+        df = pd.read_csv(fp,index_col=0)
+    except Exception as e:
+        print(fp)
+#     try:
+#         df = df.astype(pd.np.float32)
+#     except:
+#         print('{} cannot read'.format(fp))
+    return df
+
+
+def combine_single_indicator(subdir, indicator, force, kw):
+    fout = os.path.join(subdir, '{}.parquet'.format(indicator))
+    if os.path.isfile(fout) and not force:
+        return
+    print(fout)
+
+    wkn = 1
+    if kw.find('min1') >= 0:
+        wkn = 1
+
+    print('start in 5 sec worker ONLY {}'.format(wkn))
+    time.sleep(2)
+    with ProcessPoolExecutor(max_workers=wkn) as exe:
+        plist = list()
+        dfs = list()
+        #             dfall = pd.DataFrame()
+        for fp in (sorted(glob.glob(os.path.join(subdir, indicator, '*.csv.bz2')))):
+            tday_str = os.path.basename(fp).split('.csv')[0]
+            if len(tday_str) != 8:
+                continue
+            #                 print(tday_str)
+            # if day > a week ago
+            if tday_str > (datetime.now() - timedelta(days=5)).strftime('%Y%m%d'):
+                continue
+            plist.append(exe.submit(read_csv_sfp, fp))
+        for k in as_completed(plist):
+            df = k.result()
+            dfs.append(df)
+    #                 dfall = dfall.append(df)
+
+    #             df = pd.read_csv(fp,index_col=0)
+    #             dfs.append(df)
+    #             df = df.append()
+    if len(dfs) < 1:
+        return
+
+    df = pd.concat(dfs)
+    #         df = dfall
+    df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    df.to_parquet(fout)
 
 
 class NoDataFoundException(Exception):
@@ -27,12 +83,13 @@ def try_read_csv_df(initfile):
             time.sleep(1)
             continue
 
-def try_read_parquet(initfile_parquet):
+def try_read_parquet(initfile_parquet, columns=None):
     while True:
         try:
             print('read parquet:{}'.format(initfile_parquet))
             initdf = pd.read_parquet(initfile_parquet,
                                      engine='fastparquet',
+                                     columns=columns,
                                      )
             print('DONE read parquet:{}'.format(initfile_parquet))
             return initdf
@@ -57,6 +114,13 @@ class myArcticClient(object):
     def get_library(self, libname):
         return myArctic(os.path.join(self.dbrootdir, libname))
 
+    def initialize_library(self, libname):
+        libpath = os.path.join(self.dbrootdir, libname)
+        if os.path.isdir(libpath):
+            pass
+        else:
+            os.makedirs(libpath)
+
 
 class myArctic(object):
     def __init__(self, dbpath, workers=1):
@@ -65,6 +129,7 @@ class myArctic(object):
             raise Exception('{} library not found.'.format(self.dbpath))
 
         self.workers = workers
+        self.libname = os.path.basename(self.dbpath)
 
     def list_symbols(self):
         syms = list()
@@ -140,7 +205,7 @@ class myArctic(object):
             initfile = os.path.join(self.dbpath,'{}.csv.bz2'.format(indicator))
             initfile_parquet = os.path.join(self.dbpath,'{}.parquet'.format(indicator))
             if os.path.isfile(initfile_parquet):
-                initdf = try_read_parquet(initfile_parquet)
+                initdf = try_read_parquet(initfile_parquet,columns=columns)
                 # initdf.index = pd.to_datetime(initdf.index)
 
             elif os.path.isfile(initfile):
@@ -175,6 +240,7 @@ class myArctic(object):
                 adddf = pd.concat(dfs)
                 adddf.index = pd.to_datetime(adddf.index)
                 alldf = initdf.append(adddf)
+                # TODO: miniute must include 23hours
                 alldf = alldf.sort_index().truncate(before=dt_range[0],after=dt_range[1])
             else:
                 alldf = initdf.sort_index().truncate(before=dt_range[0],after=dt_range[1])
@@ -199,7 +265,7 @@ class myArctic(object):
         :param indicator:
         :return:
         '''
-        df = self.read(indicator,chunk_range=[datetime(2005,1,1), datetime.now() - timedelta(days=5)])
+        df = self.read(indicator,chunk_range=[datetime(2005,1,1), datetime.now() - timedelta(days=0)])
         fout = os.path.join(self.dbpath, '{}.parquet'.format(indicator))
         try:
             df = df.astype(pd.np.float32)
@@ -216,4 +282,28 @@ class myArctic(object):
         for indicator in sorted(indicators):
             print('update initfile for {}'.format(indicator))
             self.update_initfile(indicator)
+
+    def create_init_files(self, force_recreate=False):
+        '''
+
+        :param force_recreate: 要不要重新生成parquet文件
+        :return:
+        '''
+
+        subdir = self.dbpath
+        # factor category as db
+        if not os.path.isdir(subdir):
+            return
+        wkn = 10
+        if self.libname.find('min1') >=0:
+            wkn = 1
+        plist = list()
+        with ProcessPoolExecutor(max_workers=wkn) as exe:
+            for indicator in ProgressBar()(sorted(os.listdir(subdir))):
+                # factorname as subdir name
+                if not os.path.isdir(os.path.join(subdir, indicator)):
+                    continue
+                plist.append(exe.submit(combine_single_indicator, subdir, indicator, force_recreate, self.libname))
+            for k in ProgressBar(max_value=len(plist))(as_completed(plist)):
+                pass
 
