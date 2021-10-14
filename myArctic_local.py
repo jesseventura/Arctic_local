@@ -28,11 +28,10 @@ def combine_single_indicator(subdir, indicator, force, kw):
         return
     print(fout)
 
-    wkn = 1
-    if kw.find('min1') >= 0:
-        wkn = 1
+    wkn = 5
+    # if kw.fdd = 1
 
-    print('start in 5 sec worker ONLY {}'.format(wkn))
+    print('start in workers: {}'.format(wkn))
     time.sleep(2)
     with ProcessPoolExecutor(max_workers=wkn) as exe:
         plist = list()
@@ -44,8 +43,8 @@ def combine_single_indicator(subdir, indicator, force, kw):
                 continue
             #                 print(tday_str)
             # if day > a week ago
-            if tday_str > (datetime.now() - timedelta(days=5)).strftime('%Y%m%d'):
-                continue
+            # if tday_str > (datetime.now() - timedelta(days=5)).strftime('%Y%m%d'):
+            #     continue
             plist.append(exe.submit(read_csv_sfp, fp))
         for k in as_completed(plist):
             df = k.result()
@@ -86,12 +85,12 @@ def try_read_csv_df(initfile):
 def try_read_parquet(initfile_parquet, columns=None):
     while True:
         try:
-            print('read parquet:{}'.format(initfile_parquet))
+            # print('read parquet:{}'.format(initfile_parquet))
             initdf = pd.read_parquet(initfile_parquet,
                                      engine='fastparquet',
                                      columns=columns,
                                      )
-            print('DONE read parquet:{}'.format(initfile_parquet))
+            # print('DONE read parquet:{}'.format(initfile_parquet))
             return initdf
         except Exception as e:
             print(e)
@@ -100,7 +99,7 @@ def try_read_parquet(initfile_parquet, columns=None):
             continue
 
 class myArcticClient(object):
-    def __init__(self, dbrootdir):
+    def __init__(self, dbrootdir, ):
         self.dbrootdir = dbrootdir
     
     def list_libraries(self, id=-1):
@@ -111,8 +110,8 @@ class myArcticClient(object):
                 dbs.append(item)
         return dbs
     
-    def get_library(self, libname):
-        return myArctic(os.path.join(self.dbrootdir, libname))
+    def get_library(self, libname, workers=1):
+        return myArctic(os.path.join(self.dbrootdir, libname), workers)
 
     def initialize_library(self, libname):
         libpath = os.path.join(self.dbrootdir, libname)
@@ -165,10 +164,10 @@ class myArctic(object):
                 with ProcessPoolExecutor(max_workers=self.workers) as exe:
                     plist = [exe.submit(self.read_single_wrapper,indi,dt,date_range, chunk_range, columns)
                              for indi in indicator]
-                    ress = [k.result() for k in as_completed(plist)]
+                    ress = [k.result() for k in ProgressBar(max_value=len(plist))(as_completed(plist))]
                         
             else:
-                ress = [self.read_single_wrapper(indi,dt,date_range, chunk_range, columns) for indi in indicator]
+                ress = [self.read_single_wrapper(indi,dt,date_range, chunk_range, columns) for indi in ProgressBar()(indicator)]
 
             for res in ress:
                 # print(res[0])
@@ -214,26 +213,37 @@ class myArctic(object):
                 # initdf.index = pd.to_datetime(initdf.index)
 
             # calendar days
-            cal_days = pd.date_range(dt_range[0],dt_range[1],freq='D')
+            cal_days = pd.date_range(dt_range[0].date(),dt_range[1].date(),freq='D')
 
             t = time.time()
 
-            allfps = glob.glob(os.path.join(self.dbpath, indicator,'*.csv.bz2'))
+            # allfps = glob.glob(os.path.join(self.dbpath, indicator,'*.csv.bz2'))
+            allfps = [item for item in os.listdir(os.path.join(self.dbpath, indicator)) if item.endswith('.csv.bz2')]
             allfns = [os.path.basename(item).split('.')[0] for item in allfps]
-            my_tdays = [datetime.strptime(item,'%Y%m%d') for item in allfns]
+            my_tdays = list()
+            for item in allfns:
+                try:
+                    my_tdays.append(datetime.strptime(item,'%Y%m%d'))
+                except:
+                    continue
+            # my_tdays = [datetime.strptime(item,'%Y%m%d') for item in allfns]
             all_tdays = set(cal_days) & set(my_tdays)
             # print('t:{}'.format(time.time() - t))
             # t = time.time()
 
             # not_in_initdf_index = set(all_tdays) - set(initdf.index.unique())
-            print('indicator:{}'.format(indicator))
-            not_in_initdf_index = set(all_tdays) - set(pd.to_datetime(pd.Series(sorted(list(set(initdf.index.date))))))
+            # print('indicator:{}'.format(indicator))
+            try:
+                not_in_initdf_index = set(all_tdays) - set(pd.to_datetime(pd.Series(sorted(list(set(initdf.index.date))))))
+            except Exception as e:
+                print('indicator:{}'.format(indicator))
+                raise Exception(e)
             # print('t:{}'.format(time.time() - t))
             # t = time.time()
-            print('not_in_initdf_index: len:{}'.format(len(not_in_initdf_index)))
+            # print('not_in_initdf_index: len:{}'.format(len(not_in_initdf_index)))
             dfs = list()
             for tday in sorted(not_in_initdf_index):
-                print(tday, type(tday))
+                # print(tday, type(tday))
                 today_close = self.read_singleday(indicator, tday)
                 dfs.append(today_close)
             if len(dfs) > 0:
@@ -276,12 +286,18 @@ class myArctic(object):
         # fout_feather = os.path.join(self.dbpath, '{}.feather'.format(indicator))
         # feather.write_dataframe(df, fout_feather, version=1)
 
+    def update_single_indicator(self, indicator):
+        print('update initfile for {}'.format(indicator))
+        try:
+            self.update_initfile(indicator)
+        except:
+            pass
 
     def update_all_indicators_initfile(self):
-        indicators = self.list_symbols()
-        for indicator in sorted(indicators):
-            print('update initfile for {}'.format(indicator))
-            self.update_initfile(indicator)
+        with ProcessPoolExecutor(max_workers=self.workers) as exe:
+            plist = [exe.submit(self.update_single_indicator,indicator) for indicator in sorted(self.list_symbols())]
+            res = [r.result() for r in ProgressBar(max_value=len(plist))(as_completed(plist))]
+
 
     def create_init_files(self, force_recreate=False):
         '''
@@ -299,8 +315,9 @@ class myArctic(object):
             wkn = 1
         plist = list()
         with ProcessPoolExecutor(max_workers=wkn) as exe:
-            for indicator in ProgressBar()(sorted(os.listdir(subdir))):
+            for indicator in (sorted(os.listdir(subdir))):
                 # factorname as subdir name
+                print('----',indicator)
                 if not os.path.isdir(os.path.join(subdir, indicator)):
                     continue
                 plist.append(exe.submit(combine_single_indicator, subdir, indicator, force_recreate, self.libname))
