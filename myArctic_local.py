@@ -8,6 +8,7 @@ from multiprocessing import cpu_count
 import time
 # import feather
 from progressbar import ProgressBar
+import shutil
 
 def read_csv_sfp(fp):
     df = pd.DataFrame()
@@ -32,7 +33,7 @@ def combine_single_indicator(subdir, indicator, force, kw):
     # if kw.fdd = 1
 
     print('start in workers: {}'.format(wkn))
-    time.sleep(2)
+    # time.sleep(2)
     with ProcessPoolExecutor(max_workers=wkn) as exe:
         plist = list()
         dfs = list()
@@ -46,7 +47,7 @@ def combine_single_indicator(subdir, indicator, force, kw):
             # if tday_str > (datetime.now() - timedelta(days=5)).strftime('%Y%m%d'):
             #     continue
             plist.append(exe.submit(read_csv_sfp, fp))
-        for k in as_completed(plist):
+        for k in ProgressBar(max_value=len(plist))(as_completed(plist)):
             df = k.result()
             dfs.append(df)
     #                 dfall = dfall.append(df)
@@ -56,8 +57,8 @@ def combine_single_indicator(subdir, indicator, force, kw):
     #             df = df.append()
     if len(dfs) < 1:
         return
-
-    df = pd.concat(dfs)
+    print(f'concat DFS !!!!!!!!!! {indicator} {fout}')
+    df = pd.concat(dfs,copy=False)
     #         df = dfall
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
@@ -83,16 +84,20 @@ def try_read_csv_df(initfile):
             continue
 
 def try_read_parquet(initfile_parquet, columns=None):
+    count = 0
     while True:
         try:
             # print('read parquet:{}'.format(initfile_parquet))
             initdf = pd.read_parquet(initfile_parquet,
-                                     engine='fastparquet',
+                                     # engine='fastparquet',
                                      columns=columns,
                                      )
             # print('DONE read parquet:{}'.format(initfile_parquet))
             return initdf
         except Exception as e:
+            count += 1
+            if count > 10:
+                break
             print(e)
             print('retrying')
             time.sleep(1)
@@ -139,7 +144,7 @@ class myArctic(object):
                 syms.append(item)
         return syms
 
-    def read_singleday(self, indicator, dt=datetime(2005,1,1)):
+    def read_singleday(self, indicator, dt=datetime(2005,1,4)):
         assert isinstance(dt, datetime) or isinstance(dt, date)
         fin = os.path.join(self.dbpath, indicator, '{}.csv.bz2'.format(dt.strftime('%Y%m%d')))
         try:
@@ -149,15 +154,15 @@ class myArctic(object):
             raise NoDataFoundException('{} not found'.format(fin))
         return df
 
-    def read_single_wrapper(self, indicator, dt=datetime(2005,1,1), date_range=None, chunk_range=None, columns=None):
-        return [indicator, self.read_single_indicator(indicator, dt, date_range, chunk_range, columns)]
+    def read_single_wrapper(self, indicator, dt=datetime(2005,1,4), date_range=None, chunk_range=None, columns=None,use_initfile=True):
+        return [indicator, self.read_single_indicator(indicator, dt, date_range, chunk_range, columns,use_initfile)]
 
 
 
-    def read(self, indicator, dt=datetime(2005,1,1), date_range=None, chunk_range=None, columns=None):
+    def read(self, indicator, dt=datetime(2005,1,4), date_range=None, chunk_range=None, columns=None,use_initfile=True):
         # print(locals())
         if isinstance(indicator,str):
-            return self.read_single_indicator(indicator,dt,date_range,chunk_range,columns)
+            return self.read_single_indicator(indicator,dt,date_range,chunk_range,columns,use_initfile)
         elif isinstance(indicator, list) or isinstance(indicator, tuple):
             data_dict = dict()
             if self.workers > 1:
@@ -167,7 +172,7 @@ class myArctic(object):
                     ress = [k.result() for k in ProgressBar(max_value=len(plist))(as_completed(plist))]
                         
             else:
-                ress = [self.read_single_wrapper(indi,dt,date_range, chunk_range, columns) for indi in ProgressBar()(indicator)]
+                ress = [self.read_single_wrapper(indi,dt,date_range, chunk_range, columns,use_initfile) for indi in ProgressBar()(indicator)]
 
             for res in ress:
                 # print(res[0])
@@ -182,7 +187,8 @@ class myArctic(object):
             # return data_dict
 
 
-    def read_single_indicator(self, indicator, dt=datetime(2005,1,1), date_range=None, chunk_range=None, columns=None):
+    def read_single_indicator(self, indicator, dt=datetime(2005,1,4), date_range=None, chunk_range=None,
+                              columns=None,use_initfile=True):
         # print(locals())
         # print(vars())
         if date_range is not None or chunk_range is not None:
@@ -203,14 +209,16 @@ class myArctic(object):
             initdf = pd.DataFrame()
             initfile = os.path.join(self.dbpath,'{}.csv.bz2'.format(indicator))
             initfile_parquet = os.path.join(self.dbpath,'{}.parquet'.format(indicator))
-            if os.path.isfile(initfile_parquet):
+            if os.path.isfile(initfile_parquet) and use_initfile:
                 initdf = try_read_parquet(initfile_parquet,columns=columns)
                 # initdf.index = pd.to_datetime(initdf.index)
 
-            elif os.path.isfile(initfile):
+            elif os.path.isfile(initfile) and use_initfile:
                 initdf = try_read_csv_df(initfile)
                 # initdf = pd.read_csv(initfile, index_col=0)
                 # initdf.index = pd.to_datetime(initdf.index)
+            elif not use_initfile:
+                initdf = pd.DataFrame()
 
             # calendar days
             cal_days = pd.date_range(dt_range[0].date(),dt_range[1].date(),freq='D')
@@ -228,13 +236,19 @@ class myArctic(object):
                     continue
             # my_tdays = [datetime.strptime(item,'%Y%m%d') for item in allfns]
             all_tdays = set(cal_days) & set(my_tdays)
+            # print(all_tdays)
             # print('t:{}'.format(time.time() - t))
             # t = time.time()
 
             # not_in_initdf_index = set(all_tdays) - set(initdf.index.unique())
             # print('indicator:{}'.format(indicator))
             try:
-                not_in_initdf_index = set(all_tdays) - set(pd.to_datetime(pd.Series(sorted(list(set(initdf.index.date))))))
+                # print(initdf.index)
+                if initdf.shape[0] < 1:
+                    not_in_initdf_index = set(all_tdays)
+                else:
+                    not_in_initdf_index = set(all_tdays) - set(pd.to_datetime(pd.Series(sorted(list(set(initdf.index.date))))))
+                # print(not_in_initdf_index)
             except Exception as e:
                 print('indicator:{}'.format(indicator))
                 raise Exception(e)
@@ -245,11 +259,13 @@ class myArctic(object):
             for tday in sorted(not_in_initdf_index):
                 # print(tday, type(tday))
                 today_close = self.read_singleday(indicator, tday)
+                if columns is not None:
+                    today_close = today_close.reindex(columns=columns)
                 dfs.append(today_close)
             if len(dfs) > 0:
-                adddf = pd.concat(dfs)
+                adddf = pd.concat(dfs,copy=False)
                 adddf.index = pd.to_datetime(adddf.index)
-                alldf = initdf.append(adddf)
+                alldf = pd.concat([initdf,adddf],copy=False)
                 # TODO: miniute must include 23hours
                 alldf = alldf.sort_index().truncate(before=dt_range[0],after=dt_range[1])
             else:
@@ -261,7 +277,7 @@ class myArctic(object):
         return alldf
 
 
-    def write(self, indicator, dt, df, force=False):
+    def write(self, indicator, dt=datetime(2005,1,4), df=pd.DataFrame(), force=False):
         fout = os.path.join(self.dbpath, indicator, '{}.csv.bz2'.format(dt.strftime('%Y%m%d')))
         # if os.path.isfile(fout) and not force:
         #     raise FileExists('{} exists'.format(fout))
@@ -269,33 +285,35 @@ class myArctic(object):
             os.makedirs(os.path.dirname(fout))
         df.to_csv(fout, compression='bz2')
 
-    def update_initfile(self, indicator):
+    def update_initfile(self, indicator, days_before=0, ):
         '''
         update initfile to now - 5days
         :param indicator:
         :return:
         '''
-        df = self.read(indicator,chunk_range=[datetime(2005,1,1), datetime.now() - timedelta(days=0)])
+        df = self.read(indicator,chunk_range=[datetime(2005,1,4), datetime.now() - timedelta(days=days_before)])
         fout = os.path.join(self.dbpath, '{}.parquet'.format(indicator))
         try:
             df = df.astype(pd.np.float32)
         except:
             pass
-        df.to_parquet(fout)
+        # save write
+        df.to_parquet(fout+'.1')
+        shutil.move(fout+'.1',fout,)
 
         # fout_feather = os.path.join(self.dbpath, '{}.feather'.format(indicator))
         # feather.write_dataframe(df, fout_feather, version=1)
 
-    def update_single_indicator(self, indicator):
+    def update_single_indicator(self, indicator, days_before=0, ):
         print('update initfile for {}'.format(indicator))
         try:
-            self.update_initfile(indicator)
+            self.update_initfile(indicator, days_before, )
         except:
             pass
 
-    def update_all_indicators_initfile(self):
+    def update_all_indicators_initfile(self, days_before=0, ):
         with ProcessPoolExecutor(max_workers=self.workers) as exe:
-            plist = [exe.submit(self.update_single_indicator,indicator) for indicator in sorted(self.list_symbols())]
+            plist = [exe.submit(self.update_single_indicator,indicator,days_before,) for indicator in sorted(self.list_symbols())]
             res = [r.result() for r in ProgressBar(max_value=len(plist))(as_completed(plist))]
 
 
@@ -310,8 +328,8 @@ class myArctic(object):
         # factor category as db
         if not os.path.isdir(subdir):
             return
-        wkn = 10
-        if self.libname.find('min1') >=0:
+        wkn = self.workers
+        if self.libname.find('min1') >=0 and self.libname.find('Block') <0:
             wkn = 1
         plist = list()
         with ProcessPoolExecutor(max_workers=wkn) as exe:
