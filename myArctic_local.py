@@ -9,6 +9,8 @@ import time
 # import feather
 from progressbar import ProgressBar
 import shutil
+from pyarrow.parquet import read_schema
+
 
 def read_csv_sfp(fp):
     df = pd.DataFrame()
@@ -88,6 +90,10 @@ def try_read_parquet(initfile_parquet, columns=None):
     while True:
         try:
             # print('read parquet:{}'.format(initfile_parquet))
+            sch = read_schema(initfile_parquet)
+            # cols_valid = [item for item in sch.names if item.find('.XSH')>0 ]
+            if columns is not None:
+                columns = list(set(sch.names) & set(columns))
             initdf = pd.read_parquet(initfile_parquet,
                                      # engine='fastparquet',
                                      columns=columns,
