@@ -2,6 +2,7 @@
 import os,sys
 from datetime import datetime, date, timedelta
 import pandas as pd
+import numpy as np
 import glob
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
@@ -19,7 +20,7 @@ def read_csv_sfp(fp):
     except Exception as e:
         print(fp)
 #     try:
-#         df = df.astype(pd.np.float32)
+#         df = df.astype(np.float32)
 #     except:
 #         print('{} cannot read'.format(fp))
     return df
@@ -112,7 +113,7 @@ def try_read_parquet(initfile_parquet, columns=None):
 class myArcticClient(object):
     def __init__(self, dbrootdir, ):
         self.dbrootdir = dbrootdir
-    
+
     def list_libraries(self, id=-1):
         dbs = list()
         for item in os.listdir(self.dbrootdir):
@@ -120,7 +121,7 @@ class myArcticClient(object):
                 # print(item)
                 dbs.append(item)
         return dbs
-    
+
     def get_library(self, libname, workers=1):
         return myArctic(os.path.join(self.dbrootdir, libname), workers)
 
@@ -176,7 +177,7 @@ class myArctic(object):
                     plist = [exe.submit(self.read_single_wrapper,indi,dt,date_range, chunk_range, columns)
                              for indi in indicator]
                     ress = [k.result() for k in ProgressBar(max_value=len(plist))(as_completed(plist))]
-                        
+
             else:
                 ress = [self.read_single_wrapper(indi,dt,date_range, chunk_range, columns,use_initfile) for indi in ProgressBar()(indicator)]
 
@@ -300,7 +301,7 @@ class myArctic(object):
         df = self.read(indicator,chunk_range=[datetime(2005,1,4), datetime.now() - timedelta(days=days_before)])
         fout = os.path.join(self.dbpath, '{}.parquet'.format(indicator))
         try:
-            df = df.astype(pd.np.float32)
+            df = df.astype(np.float32)
         except:
             pass
         # save write
